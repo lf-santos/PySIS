@@ -1,4 +1,5 @@
 import os 
+import time
 
 class Simulation:
     """Connects to a given simulation.
@@ -20,6 +21,7 @@ class Simulation:
         self.Solver         = self.case.Solver
         self.ReactionSets = {i.name:i for i in self.case.BasisManager.ReactionPackageManager.ReactionSets}
         self.update_flowsheet()
+        # self.is_converged = self.converge_simulation(verbose=True)
         
     def update_flowsheet(self) -> None:
         """In case you have created/deleted streams or units, this recalculates the operations, mass streams, and energy streams.
@@ -48,6 +50,86 @@ class Simulation:
             state (int, optional): If 1, the solver is active. If 0, the solver is not active. Defaults to 1.
         """        
         self.Solver.CanSolve = state
+        
+    def converge_simulation(self, time_limit: float = 3.0, time_step:float = 0.1, verbose: bool = False) -> bool:
+        """Activates solver if inactive and checks whether the recycles and distillation columns calculation converged.
+        
+        To-do
+        =====
+        - Implement multithreading to handle unconverging simulation
+        
+        Parameters
+        ----------
+        time_limit : float, optional
+            time limit to wait for the solver to converge, by default 30.0
+        time_step : float, optional
+            time step for checking convergence, by default 0.1
+        verbose : bool, optional
+            verbosity control, by default False
+
+        Returns
+        -------
+        bool
+            True if converged, False otherwise
+        """
+        from multiprocessing import Process
+        
+        is_converged = False
+        
+        thread_run_simulation = Process(target=self.run_simulation)
+        if verbose:
+            print("Trying to converge simulation")
+        time.sleep(0.1)
+        thread_run_simulation.start()
+        
+        time_simulation = 0 
+        while time_simulation < time_limit and thread_run_simulation.is_alive():
+            time.sleep(time_step)
+            time_simulation += time_step
+            if verbose:
+                print(f"\t\t{time_simulation}")
+            
+        if thread_run_simulation.is_alive():
+            print("Simulation did not converge")
+            thread_run_simulation.terminate()
+            thread_run_simulation.join()
+            self.is_converged = False
+            return False
+        else:
+            is_converged = self.validate_convergence()
+            
+        return is_converged
+            
+    def run_simulation(self):
+        self.Solver.CanSolve = True
+            
+    def validate_convergence(self) -> bool:
+        """validates the convergence of the current state of the simulation.
+        
+        To-do
+        -----
+        - find a way to check that all operation unit and process streams calculations converged
+
+        Returns
+        -------
+        bool
+            True if valid converged, False otherwise
+        """
+        recycles = [rec for rec in self.Operations.values() if 'recycle' in rec.COMObject.TypeName.lower()]
+        for rec in recycles:
+            if rec.COMObject.RecycleConvergence == 0:
+                print(f"Recycle ({rec.name}) did not converge")
+                return False
+            
+        distillations = [dist for dist in self.Operations.values() if 'distillation' in dist.COMObject.TypeName.lower()]
+        for dist in distillations:
+            if dist.get_convergence() == False:
+                print(f"Distillation column ({dist.name}) did not converge")
+                self.is_converged = False
+                return False
+            
+        self.is_converged = True
+        return True
         
     def close(self) -> None:
         """Closes the instance and the HYSYS connection. If you do not close it,
@@ -407,7 +489,41 @@ class EnergyStream(ProcessStream):
         else:
             self.COMObject.Power.SetValue(value, units)
             
+    def get_utility_type(self, operations) -> str:
+        """Gets utility type based on upstream and downstream units
 
+        Parameters
+        ----------
+        operations : ProcessUnit
+            List of unit operations
+
+        Returns
+        -------
+        str
+            Utility type [`power_consump`, `power_gen`,`hot_utility`,`cold_utility`]
+        """
+        downstream, upstream = self.connections['Downstream'], self.connections['Upstream']
+
+        if len(downstream)>0:
+            return 'power_consump' if operations[downstream[0]].COMObject.TypeName in \
+                ['pumpop', 'compressor', 'expandop'] else 'hot_utility'
+        elif len(upstream)>0:
+            return 'power_gen' if operations[upstream[0]].COMObject.TypeName in \
+                ['pumpop', 'compressor', 'expandop'] else 'cold_utility'
+        else:
+            return None
+                
+    def register_utility_type(self, operations):
+        """Registers utility type [`power_consump`, `power_gen`,`hot_utility`,`cold_utility`] in the 
+        object based on upstream and downstream units
+
+        Parameters
+        ----------
+        operations : ProcessUnit
+            List of unit operations
+        """
+        self.utility_type = self.get_utility_type(operations)
+         
 class ProcessUnit:
     """Superclass for all process units in the flowsheet. Contains the classification of the unit,
     the COMObject, and the name.

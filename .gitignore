@@ -4,3 +4,6 @@ venv
 pysis.egg-info
 .vscode
 docs/_build
+
+notebooks
+simulations
