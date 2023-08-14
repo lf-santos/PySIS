@@ -5,10 +5,14 @@ class Simulation:
 
     Args:
         path (str): String with the raw path to the HYSYS file. If "Active", chooses the open HYSYS flowsheet.
+        version (float): HYSYS version number. For example, for HYSYS version 11, it will be 11.0.. Defaults to None.
     """
-    def __init__(self, path: str) -> None:  
-        import win32com.client as win32     
-        self.app = win32.Dispatch("HYSYS.Application")
+    def __init__(self, path: str, version:float = None) -> None:  
+        import win32com.client as win32   
+        if not version:
+            self.app = win32.Dispatch("HYSYS.Application")
+        else:
+            self.app = win32.Dispatch("HYSYS.Application.V"+"{v}".format(v=version))
         if path == "Active":
             self.case = self.app.ActiveDocument
         else:
@@ -515,14 +519,17 @@ class DistillationColumn(ProcessUnit):
         """        
         return [i.name for i in self.main_tower.FeedStages]
     
-    def set_feedtray(self, stream: MaterialStream, level: int) -> None:
-        """Sets the feedtray.
+    def set_feedtray(self, stream: str, level: int) -> None:
+        """Sets the feedtray. If the solver is deactivated, you willn not see the change. Also,
+        it unconverges the column. Remember to run() it afterwards.
 
         Args:
-            stream (MaterialStream): Stream that goes into the feed tray.
+            stream (string): Name of the stream that is already in the column.
             level (int): Level of the column where the feed is set.
-        """        
-        self.main_tower.SpecifyFeedLocation(stream, level)
+        """
+        position_feeds = [n for n,i in enumerate(self.main_tower.AttachedFeeds) if i.name == stream][0]
+        
+        self.main_tower.SpecifyFeedLocation(self.main_tower.AttachedFeeds[position_feeds], level)
         
     def get_numberstages(self) -> int:
         """Reads the number of stages.
@@ -597,7 +604,7 @@ class PFR(ProcessUnit):
         feed = [i.name for i in self.COMObject.Feeds]
         product = self.COMObject.Product.name
         try:
-            energy  = self.COMObject.EnergyStream.name
+            energy = self.COMObject.EnergyStream.name
         except:
             energy = None
         return {"Feed": feed, "Product": product, "EnergyStream": energy}
